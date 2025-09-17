@@ -1,1 +1,1 @@
-kalian baca aja dulu dasar dasar python
+hallo jangan lupa dikasih star ya
