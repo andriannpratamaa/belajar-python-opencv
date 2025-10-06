@@ -1,5 +1,5 @@
 yang perlu diinstall:
-pip install opencv-python mediapipe
+pip install opencv-python mediapipe pygame gTTS
 
 cara menjalankan:
-python deteksi_kantuk.py
+python sleep.py
