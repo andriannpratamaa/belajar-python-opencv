@@ -1,65 +1,115 @@
 import cv2
 import mediapipe as mp
 import time
+import pygame
+from gtts import gTTS
+import os
+import math
 
+# === Generate suara hanya sekali ===
+sleep_sound = "mengantuk.mp3"
+if not os.path.exists(sleep_sound):
+    gTTS("Anda mengantuk, silakan istirahat sejenak", lang="id").save(sleep_sound)
+
+# === Inisialisasi suara ===
+pygame.mixer.init()
+
+# === Inisialisasi MediaPipe Face Mesh ===
 mp_face_mesh = mp.solutions.face_mesh
-
-# Indeks titik mata
-RIGHT_EYE_TOP = 159
-RIGHT_EYE_BOTTOM = 145
-LEFT_EYE_TOP = 386
-LEFT_EYE_BOTTOM = 374
-
-CLOSED_EYE_TIME = 1.5
-EYE_AR_THRESH = 0.025
-
-def eye_aspect_ratio(landmarks, top_idx, bottom_idx, h):
-    top_y = landmarks.landmark[top_idx].y * h
-    bottom_y = landmarks.landmark[bottom_idx].y * h
-    return abs(top_y - bottom_y) / h
-
-cap = cv2.VideoCapture(0)
-with mp_face_mesh.FaceMesh(
+face_mesh = mp_face_mesh.FaceMesh(
+    static_image_mode=False,
     max_num_faces=1,
     refine_landmarks=True,
     min_detection_confidence=0.5,
     min_tracking_confidence=0.5
-) as face_mesh:
-    eye_closed_start = None
-    while cap.isOpened():
-        success, frame = cap.read()
-        if not success:
-            break
+)
 
-        h, w = frame.shape[:2]
-        rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-        results = face_mesh.process(rgb)
+# === Video Capture ===
+cap = cv2.VideoCapture(1)
+cap.set(3, 640)
+cap.set(4, 480)
 
-        if results.multi_face_landmarks:
-            for landmarks in results.multi_face_landmarks:
-                # Gambar titik mata saja
-                for idx in [RIGHT_EYE_TOP, RIGHT_EYE_BOTTOM, LEFT_EYE_TOP, LEFT_EYE_BOTTOM]:
-                    x = int(landmarks.landmark[idx].x * w)
-                    y = int(landmarks.landmark[idx].y * h)
-                    cv2.circle(frame, (x, y), 3, (0, 255, 0), -1)
+# === Variabel waktu & batas deteksi ===
+pTime = 0
+cTime = 0
+last_play_time = 0
+cooldown = 5  
+EYE_AR_THRESH = 0.22  
+EYE_AR_CONSEC_FRAMES = 10  
+closed_eyes_frame = 0
 
-                # Hitung EAR rata-rata
-                right_ear = eye_aspect_ratio(landmarks, RIGHT_EYE_TOP, RIGHT_EYE_BOTTOM, h)
-                left_ear = eye_aspect_ratio(landmarks, LEFT_EYE_TOP, LEFT_EYE_BOTTOM, h)
-                avg_ear = (right_ear + left_ear) / 2
+LEFT_EYE = [33, 160, 158, 133, 153, 144]
+RIGHT_EYE = [362, 385, 387, 263, 373, 380]
 
-                if avg_ear < EYE_AR_THRESH:
-                    if eye_closed_start is None:
-                        eye_closed_start = time.time()
-                    elif time.time() - eye_closed_start >= CLOSED_EYE_TIME:
-                        cv2.putText(frame, "ANDA MENGANTUK!", (30, 60),
-                                    cv2.FONT_HERSHEY_SIMPLEX, 1.2, (0, 0, 255), 3)
-                else:
-                    eye_closed_start = None
+def euclidean_dist(p1, p2):
+    return math.dist(p1, p2)
 
-        cv2.imshow('Deteksi Kantuk', frame)
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+def eye_aspect_ratio(landmarks, eye_points, img_w, img_h):
+    try:
+        p1 = (landmarks[eye_points[0]].x * img_w, landmarks[eye_points[0]].y * img_h)
+        p2 = (landmarks[eye_points[1]].x * img_w, landmarks[eye_points[1]].y * img_h)
+        p3 = (landmarks[eye_points[2]].x * img_w, landmarks[eye_points[2]].y * img_h)
+        p4 = (landmarks[eye_points[3]].x * img_w, landmarks[eye_points[3]].y * img_h)
+        p5 = (landmarks[eye_points[4]].x * img_w, landmarks[eye_points[4]].y * img_h)
+        p6 = (landmarks[eye_points[5]].x * img_w, landmarks[eye_points[5]].y * img_h)
+
+        vertical1 = euclidean_dist(p2, p6)
+        vertical2 = euclidean_dist(p3, p5)
+        horizontal = euclidean_dist(p1, p4)
+        ear = (vertical1 + vertical2) / (2.0 * horizontal)
+        return ear
+    except:
+        return 0.3  
+
+# === Main loop ===
+while True:
+    success, img = cap.read()
+    if not success:
+        print("⚠️ Kamera tidak terdeteksi.")
+        break
+    img = cv2.flip(img, 1)
+    img_rgb = cv2.cvtColor(img, cv2.COLOR_BGR2RGB)
+    results = face_mesh.process(img_rgb)
+    img_h, img_w = img.shape[:2]
+
+    if results.multi_face_landmarks:
+        for face_landmarks in results.multi_face_landmarks:
+            left_ear = eye_aspect_ratio(face_landmarks.landmark, LEFT_EYE, img_w, img_h)
+            right_ear = eye_aspect_ratio(face_landmarks.landmark, RIGHT_EYE, img_w, img_h)
+            avg_ear = (left_ear + right_ear) / 2.0
+
+            # Deteksi mengantuk
+            if avg_ear < EYE_AR_THRESH:
+                closed_eyes_frame += 1
+            else:
+                closed_eyes_frame = 0
+
+            if closed_eyes_frame >= EYE_AR_CONSEC_FRAMES:
+                now = time.time()
+                if now - last_play_time > cooldown:
+                    pygame.mixer.music.load(sleep_sound)
+                    pygame.mixer.music.play()
+                    last_play_time = now
+
+                cv2.putText(img, "ANDA MENGANTUK!", (200, 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 0, 255), 4)
+            else:
+                cv2.putText(img, "WASPADA", (250, 100),
+                            cv2.FONT_HERSHEY_SIMPLEX, 1.5, (0, 255, 0), 4)
+    else:
+        cv2.putText(img, "Wajah tidak terdeteksi", (200, 100),
+                    cv2.FONT_HERSHEY_SIMPLEX, 1, (0, 255, 255), 3)
+
+    # === FPS counter ===
+    cTime = time.time()
+    fps = 1 / (cTime - pTime) if (cTime - pTime) > 0 else 0
+    pTime = cTime
+    cv2.putText(img, f'FPS: {int(fps)}', (20, 40),
+                cv2.FONT_HERSHEY_SIMPLEX, 1, (255, 255, 255), 2)
+
+    cv2.imshow("Deteksi Mengantuk", img)
+    if cv2.waitKey(1) & 0xFF == 27:  # ESC untuk keluar
+        break
 
 cap.release()
 cv2.destroyAllWindows()
